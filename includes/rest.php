@@ -99,22 +99,29 @@ class LOL_REST {
         $should_ask_questions = count($conversation) < 4; // Ask questions in first few exchanges
         
         if ($should_ask_questions) {
-            // Generate follow-up questions
+            // Generate consumer-perspective suggested prompts (what the customer could ask)
             $categories = $recommend->get_available_categories();
             $effects = $recommend->get_available_effects();
-            $questions = $openai->generate_questions($conversation, $categories, $effects);
+            $suggested_prompts = $openai->generate_questions($conversation, $categories, $effects);
             
-            if (!empty($questions)) {
-                // Save conversation
-                $this->save_conversation_history($session_id, $conversation);
-                
-                return rest_ensure_response(array(
-                    'response' => $questions[0], // Return first question
-                    'questions' => $questions,
-                    'products' => array(),
-                    'session_id' => $session_id,
-                ));
-            }
+            // Friendly, cannabis-knowledgeable reply to the user's message (not a question we ask them)
+            $reply_prompt = "You are a friendly, knowledgeable cannabis dispensary assistant at Legacy on Lark. You can discuss cannabis basics, product types (flower, vapes, edibles, concentrates), effects (relaxation, sleep, focus, creativity), and terpenes in simple terms. Keep it conversational and helpful. Do NOT ask the customer questions—respond to what they said. If they said hello or something brief, give a warm welcome and invite them to ask what they're looking for. Keep response under 80 words.";
+            $reply_messages = array(
+                array('role' => 'system', 'content' => $reply_prompt),
+                array('role' => 'user', 'content' => $message),
+            );
+            $ai_reply = $openai->chat_completion($reply_messages);
+            $response_text = is_wp_error($ai_reply) ? __('Hi! I\'m here to help you find the right products. What are you looking for today—relaxation, sleep, focus, or something else?', 'lol-ai-recommender') : $ai_reply;
+            
+            $conversation[] = array('role' => 'assistant', 'content' => $response_text);
+            $this->save_conversation_history($session_id, $conversation);
+            
+            return rest_ensure_response(array(
+                'response' => $response_text,
+                'questions' => $suggested_prompts, // Consumer-perspective: prompts they can click to ask
+                'products' => array(),
+                'session_id' => $session_id,
+            ));
         }
         
         // Get available categories and brands for context
@@ -161,7 +168,7 @@ class LOL_REST {
         $category_info = !empty($filters['filters']['category']) ? "\n\nCustomer is interested in: " . $filters['filters']['category'] : '';
         $effects_info = !empty($filters['filters']['effects']) ? "\n\nDesired effects: " . implode(', ', $filters['filters']['effects']) : '';
         
-        $system_prompt = "You are a helpful and knowledgeable cannabis dispensary assistant. Recommend products naturally and conversationally based on the customer's needs. Mention 2-3 specific products by name, their category, and explain why they're good matches based on the customer's preferences. Be friendly, informative, and helpful. Keep response under 200 words.";
+        $system_prompt = "You are a friendly, knowledgeable cannabis dispensary assistant at Legacy on Lark. You understand cannabis basics: flower, vapes, edibles, concentrates, pre-rolls, terpenes, and effects (relaxation, sleep, focus, creativity, etc.). Recommend products naturally and conversationally. Mention 2-3 specific products by name, their category, and why they match. You can briefly explain cannabis concepts if relevant (e.g. indica vs sativa, terpenes) in simple terms. Be warm and helpful. Keep response under 200 words.";
         
         $ai_messages = array(
             array('role' => 'system', 'content' => $system_prompt),

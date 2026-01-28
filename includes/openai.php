@@ -213,14 +213,15 @@ Rules:
     }
     
     /**
-     * Generate follow-up questions
+     * Generate suggested prompts from CONSUMER perspective (questions a customer might ask).
+     * These are example prompts the user can click to ask the AI, NOT questions the AI asks the user.
      */
     public function generate_questions($conversation_history, $available_categories = array(), $available_effects = array()) {
         if (!$this->is_configured()) {
-            return array();
+            return $this->get_default_consumer_prompts($available_categories);
         }
         
-        $system_prompt = "You are a helpful dispensary assistant. Based on the conversation, generate 2-5 clarifying questions to better understand what the customer wants. Return questions as a JSON array of strings, e.g. [\"Question 1?\", \"Question 2?\"]";
+        $system_prompt = "You are a cannabis dispensary assistant. Generate 4-5 example questions or prompts that a CUSTOMER might type to ask the dispensary. These are suggestions for what the customer could ask next (consumer perspective), NOT questions you would ask them. Each should be something a shopper would say, e.g. 'What do you recommend for relaxation?', 'Do you have flower for sleep?', 'I need something for focus'. Return ONLY a JSON array of strings. No other text. Example format: [\"What flower do you recommend for relaxation?\", \"Show me edibles for sleep\"]";
 
         $conversation_text = '';
         foreach ($conversation_history as $msg) {
@@ -231,24 +232,23 @@ Rules:
         
         $context = '';
         if (!empty($available_categories)) {
-            $context .= "Available categories: " . implode(', ', array_slice($available_categories, 0, 10)) . "\n";
+            $context .= "Available product categories we carry: " . implode(', ', array_slice($available_categories, 0, 12)) . "\n";
         }
         if (!empty($available_effects)) {
-            $context .= "Available effects: " . implode(', ', array_slice($available_effects, 0, 10)) . "\n";
+            $context .= "Effects we have products for: " . implode(', ', array_slice($available_effects, 0, 10)) . "\n";
         }
         
         $messages = array(
             array('role' => 'system', 'content' => $system_prompt),
-            array('role' => 'user', 'content' => $context . "\nConversation:\n" . $conversation_text . "\n\nGenerate clarifying questions:"),
+            array('role' => 'user', 'content' => $context . "\nConversation so far:\n" . $conversation_text . "\n\nGenerate 4-5 short example prompts a customer might type next (things they could ask us):"),
         );
         
         $response = $this->chat_completion($messages, 'gpt-4o-mini');
         
         if (is_wp_error($response)) {
-            return array();
+            return $this->get_default_consumer_prompts($available_categories);
         }
         
-        // Extract JSON array
         $json = $response;
         if (preg_match('/\[.*\]/s', $response, $matches)) {
             $json = $matches[0];
@@ -257,9 +257,23 @@ Rules:
         $questions = json_decode($json, true);
         
         if (json_last_error() !== JSON_ERROR_NONE || !is_array($questions)) {
-            return array();
+            return $this->get_default_consumer_prompts($available_categories);
         }
         
-        return array_slice($questions, 0, 5); // Limit to 5 questions
+        return array_slice($questions, 0, 5);
+    }
+    
+    /**
+     * Default consumer-perspective prompts when API is unavailable or returns invalid data.
+     */
+    private function get_default_consumer_prompts($available_categories = array()) {
+        $defaults = array(
+            __('What do you recommend for relaxation?', 'lol-ai-recommender'),
+            __('Do you have flower for sleep?', 'lol-ai-recommender'),
+            __('I\'m looking for something for focus', 'lol-ai-recommender'),
+            __('What edibles do you have?', 'lol-ai-recommender'),
+            __('Show me vapes for daytime', 'lol-ai-recommender'),
+        );
+        return array_slice($defaults, 0, 5);
     }
 }
