@@ -1,0 +1,241 @@
+/**
+ * Chat UI Styles
+ */
+
+.lol-chat-container {
+    max-width: 800px;
+    margin: 20px auto;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    height: 600px;
+}
+
+.lol-chat-header {
+    padding: 15px 20px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #ddd;
+    border-radius: 8px 8px 0 0;
+}
+
+.lol-chat-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: #333;
+}
+
+.lol-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    background: #fafafa;
+}
+
+.lol-message {
+    margin-bottom: 15px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    max-width: 80%;
+    word-wrap: break-word;
+    line-height: 1.5;
+}
+
+.lol-message-user {
+    background: #0073aa;
+    color: #fff;
+    margin-left: auto;
+    text-align: right;
+}
+
+.lol-message-assistant {
+    background: #fff;
+    color: #333;
+    border: 1px solid #ddd;
+    margin-right: auto;
+}
+
+.lol-message.error {
+    background: #f8d7da;
+    color: #721c24;
+    border-color: #f5c6cb;
+}
+
+.lol-loading {
+    display: inline-block;
+}
+
+.lol-loading::after {
+    content: '...';
+    animation: dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes dots {
+    0%, 20% { content: '.'; }
+    40% { content: '..'; }
+    60%, 100% { content: '...'; }
+}
+
+.lol-products {
+    margin-top: 20px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 15px;
+}
+
+.lol-product {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 15px;
+    transition: box-shadow 0.2s;
+}
+
+.lol-product:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.lol-product-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+
+.lol-product-name {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+    flex: 1;
+}
+
+.lol-product-price {
+    font-size: 18px;
+    font-weight: 700;
+    color: #0073aa;
+    margin-left: 10px;
+}
+
+.lol-product-category {
+    font-size: 12px;
+    color: #666;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.lol-product-reason {
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 12px;
+    font-style: italic;
+}
+
+.lol-product-link {
+    display: inline-block;
+    padding: 8px 16px;
+    background: #0073aa;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: background 0.2s;
+    width: 100%;
+    text-align: center;
+    box-sizing: border-box;
+}
+
+.lol-product-link:hover {
+    background: #005a87;
+    color: #fff;
+}
+
+.lol-questions {
+    margin-top: 15px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.lol-question-button {
+    padding: 8px 16px;
+    background: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #333;
+    transition: all 0.2s;
+}
+
+.lol-question-button:hover {
+    background: #e0e0e0;
+    border-color: #bbb;
+}
+
+.lol-chat-input-container {
+    display: flex;
+    padding: 15px;
+    background: #fff;
+    border-top: 1px solid #ddd;
+    border-radius: 0 0 8px 8px;
+    gap: 10px;
+}
+
+.lol-chat-input {
+    flex: 1;
+    padding: 12px 16px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    outline: none;
+}
+
+.lol-chat-input:focus {
+    border-color: #0073aa;
+    box-shadow: 0 0 0 2px rgba(0, 115, 170, 0.1);
+}
+
+.lol-chat-input:disabled {
+    background: #f5f5f5;
+    cursor: not-allowed;
+}
+
+.lol-chat-send {
+    padding: 12px 24px;
+    background: #0073aa;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.lol-chat-send:hover:not(:disabled) {
+    background: #005a87;
+}
+
+.lol-chat-send:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .lol-chat-container {
+        height: 500px;
+        margin: 10px;
+    }
+    
+    .lol-message {
+        max-width: 90%;
+    }
+    
+    .lol-products {
+        grid-template-columns: 1fr;
+    }
+}
