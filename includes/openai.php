@@ -107,8 +107,10 @@ class LOL_OpenAI {
             'body' => json_encode(array(
                 'model' => $model,
                 'messages' => $messages,
-                'temperature' => 0.7,
-                'max_tokens' => 1000,
+                'temperature' => 0.5, // Lower temperature for more consistent responses
+                'max_tokens' => 400, // Limit response length
+                'presence_penalty' => 0.4, // Discourage repeating topics
+                'frequency_penalty' => 0.4, // Discourage repeating phrases
             )),
             'timeout' => 30,
         ));
@@ -177,16 +179,30 @@ Rules:
 - top_n should be 3-10 based on how specific the request is
 - Return ONLY the JSON, no other text" . $category_context . $brand_context;
 
+        // Focus on recent conversation (last 6 messages = 3 turns) for filter extraction
+        $recent_history = array_slice($conversation_history, -6);
+        
         $conversation_text = '';
-        foreach ($conversation_history as $msg) {
+        foreach ($recent_history as $msg) {
             $role = isset($msg['role']) ? $msg['role'] : 'user';
             $content = isset($msg['content']) ? $msg['content'] : '';
             $conversation_text .= ucfirst($role) . ": " . $content . "\n";
         }
         
+        // Emphasize the LATEST user message
+        $latest_user_message = '';
+        for ($i = count($recent_history) - 1; $i >= 0; $i--) {
+            if (isset($recent_history[$i]['role']) && $recent_history[$i]['role'] === 'user') {
+                $latest_user_message = $recent_history[$i]['content'];
+                break;
+            }
+        }
+        
+        $extraction_prompt = "Extract filters from this conversation. Pay special attention to the LATEST user message: \"$latest_user_message\"\n\nFull conversation:\n" . $conversation_text;
+        
         $messages = array(
             array('role' => 'system', 'content' => $system_prompt),
-            array('role' => 'user', 'content' => "Extract filters from this conversation:\n\n" . $conversation_text),
+            array('role' => 'user', 'content' => $extraction_prompt),
         );
         
         $response = $this->chat_completion($messages, 'gpt-4o-mini');

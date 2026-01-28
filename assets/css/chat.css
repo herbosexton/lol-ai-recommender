@@ -28,6 +28,9 @@
     background: var(--lol-forest-green);
     border-bottom: 1px solid rgba(45, 71, 57, 0.2);
     border-radius: 12px 12px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 .lol-chat-header h3 {
@@ -35,6 +38,24 @@
     font-size: 20px;
     font-weight: 600;
     color: var(--lol-cream-white);
+    flex: 1;
+}
+
+.lol-chat-reset {
+    padding: 8px 16px;
+    background: rgba(249, 247, 242, 0.15);
+    color: var(--lol-cream-white);
+    border: 1px solid rgba(249, 247, 242, 0.3);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.lol-chat-reset:hover {
+    background: rgba(249, 247, 242, 0.25);
+    border-color: rgba(249, 247, 242, 0.5);
 }
 
 .lol-chat-messages {
