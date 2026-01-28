@@ -140,10 +140,10 @@
                         addProducts(products);
                     }
                     
-                    // Add clarifying questions as quick-reply buttons
+                    // Add clarifying questions / suggested prompts as quick-reply buttons
                     const questions = response.clarifying_questions || response.questions || [];
                     if (questions.length > 0) {
-                        addClarifyingQuestions(questions);
+                        addQuestions(questions);
                     }
                     
                     // Re-enable input
@@ -185,15 +185,16 @@
             if (errorType === 'rate_limited' && retryCount === 0) {
                 // Show countdown and auto-retry once
                 let countdown = retryAfter;
-                const countdownMsg = addMessage('assistant', 'Rate limit reached. Retrying in ' + countdown + ' seconds...', false, 'warning');
+                const countdownMsgId = addMessage('assistant', 'Rate limit reached. Retrying in ' + countdown + ' seconds...', false, 'warning');
+                const $countdownMsg = $('#' + countdownMsgId).find('.lol-message-content');
                 
                 const countdownInterval = setInterval(function() {
                     countdown--;
                     if (countdown > 0) {
-                        $('#' + countdownMsg).html('Rate limit reached. Retrying in ' + countdown + ' seconds...');
+                        $countdownMsg.html('Rate limit reached. Retrying in ' + countdown + ' seconds...');
                     } else {
                         clearInterval(countdownInterval);
-                        $('#' + countdownMsg).remove();
+                        $('#' + countdownMsgId).remove();
                         // Retry once
                         const newLoadingId = addMessage('assistant', '...', true);
                         input.prop('disabled', true);
