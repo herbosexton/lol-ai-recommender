@@ -111,6 +111,21 @@
     60%, 100% { content: '...'; }
 }
 
+.lol-message-error {
+    background-color: #fee;
+    border-color: #fcc;
+}
+
+.lol-message-warning {
+    background-color: #fff8e1;
+    border-color: #ffc107;
+}
+
+.lol-message-content {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
 .lol-products {
     margin-top: 28px;
     display: grid;
@@ -124,6 +139,26 @@
     border-radius: 10px;
     padding: 20px;
     transition: box-shadow 0.2s;
+    display: flex;
+    flex-direction: column;
+}
+
+.lol-product-image {
+    width: 100%;
+    max-width: 200px;
+    height: auto;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    object-fit: cover;
+    align-self: center;
+}
+
+.lol-product-description {
+    font-size: 0.9em;
+    color: var(--lol-charcoal);
+    margin: 8px 0;
+    line-height: 1.5;
+    opacity: 0.85;
 }
 
 .lol-product:hover {

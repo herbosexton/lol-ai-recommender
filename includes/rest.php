@@ -82,195 +82,221 @@ class LOL_REST {
     }
     
     /**
-     * Handle chat request
+     * Handle chat request with error handling wrapper
      */
     public function handle_chat($request) {
-        // Rate limiting
-        $ip = $this->get_client_ip();
-        $rate_limit = get_option('lol_chat_rate_limit', 10);
-        
-        if (!$this->check_rate_limit($ip, $rate_limit)) {
-            return new WP_Error('rate_limit_exceeded', __('Rate limit exceeded. Please wait a moment.', 'lol-ai-recommender'), array('status' => 429));
-        }
-        
-        $message = trim($request->get_param('message'));
-        $session_id = $request->get_param('session_id');
-        
-        if (empty($session_id)) {
-            $session_id = $this->generate_session_id();
-        }
-        
-        // Get conversation history
-        $conversation = $this->get_conversation_history($session_id);
-        
-        // Check if this is a topic change or reset trigger
-        $should_reset = $this->should_reset_conversation($message, $conversation);
-        if ($should_reset) {
-            $conversation = array(); // Start fresh
-            $this->log_debug('Conversation reset triggered', array('session_id' => $session_id, 'message' => $message));
-        }
-        
-        // Trim conversation to last 10 messages (5 turns) to prevent stale context
-        $conversation = array_slice($conversation, -10);
-        
-        // Add NEW user message (this is the current turn)
-        $conversation[] = array('role' => 'user', 'content' => $message);
-        
-        // Check if we need to ask questions (only for very early exchanges)
-        $openai = LOL_OpenAI::get_instance();
-        $recommend = LOL_Recommend::get_instance();
-        
-        $should_ask_questions = count($conversation) <= 2; // Only first user message
-        
-        if ($should_ask_questions) {
-            // Generate consumer-perspective suggested prompts (what the customer could ask)
-            $categories = $recommend->get_available_categories();
-            $effects = $recommend->get_available_effects();
-            $suggested_prompts = $openai->generate_questions($conversation, $categories, $effects);
+        try {
+            // Rate limiting
+            $ip = $this->get_client_ip();
+            $rate_limit = get_option('lol_chat_rate_limit', 10);
             
-            // Friendly, cannabis-knowledgeable reply to the user's CURRENT message only
-            $system_prompt = "You are a friendly, knowledgeable cannabis dispensary assistant at Legacy on Lark. You can discuss cannabis basics, product types (flower, vapes, edibles, concentrates), effects (relaxation, sleep, focus, creativity), and terpenes in simple terms. Keep it conversational and helpful. Respond ONLY to the latest user message. Do NOT repeat previous responses. Do NOT ask the customer questions—respond to what they said. If they said hello or something brief, give a warm welcome and invite them to ask what they're looking for. Keep response under 80 words.";
+            if (!$this->check_rate_limit($ip, $rate_limit)) {
+                return rest_ensure_response(array(
+                    'ok' => false,
+                    'assistant_message' => __('Rate limit exceeded. Please wait a moment before sending another message.', 'lol-ai-recommender'),
+                    'recommendations' => array(),
+                    'clarifying_questions' => array(),
+                    'error_type' => 'rate_limited',
+                    'retry_after' => 60,
+                    'session_id' => null,
+                ));
+            }
             
-            // Use ONLY the latest user message for early exchanges
-            $reply_messages = array(
-                array('role' => 'system', 'content' => $system_prompt),
-                array('role' => 'user', 'content' => $message), // Only current message
-            );
+            $message = trim($request->get_param('message'));
+            $session_id = $request->get_param('session_id');
             
-            $ai_reply = $openai->chat_completion($reply_messages);
-            $response_text = is_wp_error($ai_reply) ? __('Hi! I\'m here to help you find the right products. What are you looking for today—relaxation, sleep, focus, or something else?', 'lol-ai-recommender') : $ai_reply;
+            if (empty($message)) {
+                return rest_ensure_response(array(
+                    'ok' => false,
+                    'assistant_message' => __('Please enter a message.', 'lol-ai-recommender'),
+                    'recommendations' => array(),
+                    'clarifying_questions' => array(),
+                    'error_type' => 'invalid_input',
+                    'retry_after' => null,
+                    'session_id' => $session_id,
+                ));
+            }
+            
+            if (empty($session_id)) {
+                $session_id = $this->generate_session_id();
+            }
+            
+            // Get conversation history
+            $conversation = $this->get_conversation_history($session_id);
+            
+            // Check if this is a topic change or reset trigger
+            $should_reset = $this->should_reset_conversation($message, $conversation);
+            if ($should_reset) {
+                $conversation = array(); // Start fresh
+                $this->log_debug('Conversation reset triggered', array('session_id' => $session_id, 'message' => $message));
+            }
+            
+            // Trim conversation to last 10 messages (5 turns) to prevent stale context
+            $conversation = array_slice($conversation, -10);
+            
+            // Add NEW user message (this is the current turn)
+            $conversation[] = array('role' => 'user', 'content' => $message);
+            
+            // Check age requirement (basic check)
+            if ($this->mentions_underage($message)) {
+                return rest_ensure_response(array(
+                    'ok' => true,
+                    'assistant_message' => __('I appreciate your interest, but cannabis products are only available to adults 21 and older. If you have questions about cannabis, I recommend speaking with a healthcare provider or checking educational resources.', 'lol-ai-recommender'),
+                    'recommendations' => array(),
+                    'clarifying_questions' => array(),
+                    'error_type' => null,
+                    'retry_after' => null,
+                    'session_id' => $session_id,
+                ));
+            }
+            
+            // Get intent extraction helper
+            $intent_helper = LOL_Intent::get_instance();
+            $recommend = LOL_Recommend::get_instance();
+            
+            // Get available categories and effects for context
+            $available_categories = $recommend->get_available_categories();
+            $available_effects = $recommend->get_available_effects();
+            
+            // Extract blended intent (conversation + recommendation intent)
+            $intent = $intent_helper->extract_blended_intent($conversation, $available_categories, $available_effects);
+            
+            // Get products if recommendation intent exists
+            $products = array();
+            if (!empty($intent['recommendation_intent']['wants_recs'])) {
+                $rec_intent = $intent['recommendation_intent'];
+                
+                // Build filters from intent
+                $filters = array();
+                if ($rec_intent['category'] !== 'unknown') {
+                    $filters['category'] = $rec_intent['category'];
+                }
+                if (!empty($rec_intent['effects'])) {
+                    $filters['effects'] = $rec_intent['effects'];
+                }
+                if (!empty($rec_intent['price_max'])) {
+                    $filters['price_max'] = $rec_intent['price_max'];
+                }
+                
+                // Get recommendations with intent-aware scoring
+                $products = $recommend->get_recommendations_with_intent($filters, $rec_intent, 5);
+            }
+            
+            // Enhance reply with product mentions if we have products
+            $final_reply = $intent['reply'];
+            if (!empty($products) && !empty($intent['recommendation_intent']['wants_recs'])) {
+                // Products will be shown separately, but we can mention them in reply
+                $product_names = array_slice(array_column($products, 'name'), 0, 3);
+                if (!empty($product_names)) {
+                    $final_reply .= ' I\'ve found some products that might work well for you—check them out below.';
+                }
+            }
+            
+            // Add safety notes to reply if present
+            if (!empty($intent['safety_notes'])) {
+                $final_reply .= "\n\n" . __('Important:', 'lol-ai-recommender') . ' ' . implode(' ', $intent['safety_notes']);
+            }
+            
+            // Add medical disclaimer if health-related
+            if ($this->is_health_related($message)) {
+                $final_reply .= "\n\n" . __('Please note: This is not medical advice. Consult with a healthcare provider, especially if you take medications or have medical conditions.', 'lol-ai-recommender');
+            }
             
             // Add assistant response to conversation
-            $conversation[] = array('role' => 'assistant', 'content' => $response_text);
+            $conversation[] = array('role' => 'assistant', 'content' => $final_reply);
             
             // Save conversation state
-            $this->save_conversation_state($session_id, $conversation, $response_text);
+            $this->save_conversation_state($session_id, $conversation, $final_reply);
             
-            $this->log_debug('Early exchange response', array(
+            // Store user profile if extracted
+            if (!empty($intent['recommendation_intent']['thc_preference']) && $intent['recommendation_intent']['thc_preference'] !== 'unknown') {
+                $this->save_user_profile($session_id, array(
+                    'thc_preference' => $intent['recommendation_intent']['thc_preference'],
+                    'cbd_preference' => $intent['recommendation_intent']['cbd_preference'],
+                ));
+            }
+            
+            $this->log_debug('Chat response generated', array(
                 'session_id' => $session_id,
                 'message_count' => count($conversation),
                 'user_message' => $message,
+                'products_found' => count($products),
+                'wants_recs' => !empty($intent['recommendation_intent']['wants_recs']),
                 'reset_triggered' => $should_reset,
             ));
             
-            return rest_ensure_response(array(
-                'response' => $response_text,
-                'questions' => $suggested_prompts,
-                'products' => array(),
+            $result = rest_ensure_response(array(
+                'ok' => true,
+                'assistant_message' => $final_reply,
+                'recommendations' => $products,
+                'clarifying_questions' => $intent['clarifying_questions'],
+                'error_type' => null,
+                'retry_after' => null,
                 'session_id' => $session_id,
             ));
-        }
-        
-        // Get available categories and brands for context
-        $available_categories = $recommend->get_available_categories();
-        $available_brands = $recommend->get_available_brands();
-        
-        // Use recent conversation context (last 2-3 turns) for filter extraction if topic changed
-        $conversation_for_filters = $conversation;
-        if ($should_reset || $this->is_topic_change($message, $conversation)) {
-            // Use only last 2 messages (1 turn) if topic changed
-            $conversation_for_filters = array_slice($conversation, -2);
-            $this->log_debug('Topic change detected, using limited context', array('session_id' => $session_id));
-        }
-        
-        // Extract filters from conversation (focusing on latest intent)
-        $filters = $openai->extract_filters($conversation_for_filters, $available_categories, $available_brands);
-        
-        if (is_wp_error($filters)) {
-            // Fallback: use current message only
-            $filters = array(
-                'intent_summary' => $message,
-                'filters' => array(),
-                'must_have' => array(),
-                'avoid' => array(),
-                'top_n' => 5,
-            );
-        }
-        
-        // Get recommendations
-        $top_n = isset($filters['top_n']) ? intval($filters['top_n']) : 5;
-        $products = $recommend->get_recommendations($filters['filters'], $top_n);
-        
-        // Build product context with categories and descriptions
-        $product_context = array();
-        foreach ($products as $product) {
-            $product_info = $product['name'];
-            if (!empty($product['category'])) {
-                $product_info .= ' (' . $product['category'] . ')';
+            
+            // Handle errors with structured response
+            if (is_wp_error($result)) {
+                $error_code = $result->get_error_code();
+                $error_data = $result->get_error_data();
+                
+                if ($error_code === 'rate_limited') {
+                    $retry_after = isset($error_data['retry_after']) ? $error_data['retry_after'] : 20;
+                    return rest_ensure_response(array(
+                        'ok' => false,
+                        'assistant_message' => __('I\'m getting a lot of requests right now. Please wait ' . $retry_after . ' seconds and try again.', 'lol-ai-recommender'),
+                        'recommendations' => array(),
+                        'clarifying_questions' => array(),
+                        'error_type' => 'rate_limited',
+                        'retry_after' => $retry_after,
+                        'session_id' => $session_id,
+                    ));
+                }
+                
+                if ($error_code === 'temporary_error') {
+                    $retry_after = isset($error_data['retry_after']) ? $error_data['retry_after'] : 5;
+                    return rest_ensure_response(array(
+                        'ok' => false,
+                        'assistant_message' => __('Connection issue. Let me try again in a moment...', 'lol-ai-recommender'),
+                        'recommendations' => array(),
+                        'clarifying_questions' => array(),
+                        'error_type' => 'temporary',
+                        'retry_after' => $retry_after,
+                        'session_id' => $session_id,
+                    ));
+                }
+                
+                // Generic error - return friendly fallback
+                return rest_ensure_response(array(
+                    'ok' => true,
+                    'assistant_message' => __('Thanks for your question! I\'m having a technical issue right now, but I\'m here to help. Could you try rephrasing your question, or feel free to browse our menu directly?', 'lol-ai-recommender'),
+                    'recommendations' => array(),
+                    'clarifying_questions' => array(
+                        __('What products are you looking for?', 'lol-ai-recommender'),
+                        __('Do you have questions about cannabis?', 'lol-ai-recommender'),
+                    ),
+                    'error_type' => null,
+                    'retry_after' => null,
+                    'session_id' => $session_id,
+                ));
             }
-            if (!empty($product['price'])) {
-                $product_info .= ' - $' . $product['price'];
-            }
-            if (!empty($product['short_reason'])) {
-                $product_info .= ' - ' . $product['short_reason'];
-            }
-            $product_context[] = $product_info;
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            $this->log_debug('Exception in handle_chat', array('error' => $e->getMessage()));
+            return rest_ensure_response(array(
+                'ok' => true,
+                'assistant_message' => __('I\'m here to help! What can I assist you with today?', 'lol-ai-recommender'),
+                'recommendations' => array(),
+                'clarifying_questions' => array(),
+                'error_type' => null,
+                'retry_after' => null,
+                'session_id' => $session_id ?? null,
+            ));
         }
-        
-        $product_list = !empty($product_context) ? "\n\nRecommended products:\n" . implode("\n", array_slice($product_context, 0, 5)) : '';
-        
-        // Generate AI response - use recent conversation context
-        $category_info = !empty($filters['filters']['category']) ? "\n\nCustomer is interested in: " . $filters['filters']['category'] : '';
-        $effects_info = !empty($filters['filters']['effects']) ? "\n\nDesired effects: " . implode(', ', $filters['filters']['effects']) : '';
-        
-        $system_prompt = "You are a friendly, knowledgeable cannabis dispensary assistant at Legacy on Lark. You understand cannabis basics: flower, vapes, edibles, concentrates, pre-rolls, terpenes, and effects (relaxation, sleep, focus, creativity, etc.). IMPORTANT: Respond ONLY to the LATEST user message. Do NOT repeat previous responses. Do NOT continue previous topics unless the user explicitly continues them. If the user asks a new question, answer that new question. Recommend products naturally and conversationally. Mention 2-3 specific products by name, their category, and why they match. You can briefly explain cannabis concepts if relevant (e.g. indica vs sativa, terpenes) in simple terms. Be warm and helpful. Keep response under 200 words.";
-        
-        // Build messages array with system prompt + recent conversation (last 6 messages = 3 turns)
-        $recent_conversation = array_slice($conversation, -6);
-        $ai_messages = array_merge(
-            array(array('role' => 'system', 'content' => $system_prompt)),
-            $recent_conversation
-        );
-        
-        // Get last assistant response hash to detect repeats
-        $last_response_hash = $this->get_last_response_hash($session_id);
-        
-        $ai_response = $openai->chat_completion($ai_messages);
-        
-        if (is_wp_error($ai_response)) {
-            // Fallback response
-            $ai_response = __('Based on your preferences, here are some great options:', 'lol-ai-recommender');
-        }
-        
-        // Check for repeat responses
-        $response_hash = md5(strtolower(trim($ai_response)));
-        if ($last_response_hash && $response_hash === $last_response_hash) {
-            $this->log_debug('Repeat response detected, retrying', array('session_id' => $session_id));
-            // Retry with stronger instruction
-            $retry_system_prompt = $system_prompt . "\n\nCRITICAL: The user just sent a NEW message. Do NOT repeat your previous response. Answer ONLY the latest user message with fresh content.";
-            $retry_messages = array_merge(
-                array(array('role' => 'system', 'content' => $retry_system_prompt)),
-                array_slice($conversation, -2) // Only last turn
-            );
-            $retry_response = $openai->chat_completion($retry_messages);
-            if (!is_wp_error($retry_response) && md5(strtolower(trim($retry_response))) !== $last_response_hash) {
-                $ai_response = $retry_response;
-            } else {
-                // Still repeating, use a simple response
-                $ai_response = __('I understand you\'re asking about something new. ' . $message . ' - Let me help you with that. ' . (!empty($products) ? 'Here are some options:' : 'What specifically are you looking for?'), 'lol-ai-recommender');
-            }
-        }
-        
-        // Add assistant response to conversation
-        $conversation[] = array('role' => 'assistant', 'content' => $ai_response);
-        
-        // Save conversation state
-        $this->save_conversation_state($session_id, $conversation, $ai_response);
-        
-        $this->log_debug('Chat response generated', array(
-            'session_id' => $session_id,
-            'message_count' => count($conversation),
-            'user_message' => $message,
-            'products_found' => count($products),
-            'reset_triggered' => $should_reset,
-        ));
-        
-        return rest_ensure_response(array(
-            'response' => $ai_response,
-            'products' => $products,
-            'session_id' => $session_id,
-        ));
     }
+    
     
     /**
      * Handle reset request
@@ -511,6 +537,58 @@ class LOL_REST {
         
         // If overlap is less than 30%, likely a topic change
         return $overlap_ratio < 0.3;
+    }
+    
+    /**
+     * Check if message mentions underage
+     */
+    private function mentions_underage($message) {
+        $message_lower = strtolower($message);
+        $age_patterns = array('/\b(1[0-9]|under\s*21|underage|minor|teen)\b/i');
+        
+        foreach ($age_patterns as $pattern) {
+            if (preg_match($pattern, $message_lower)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Check if message is health-related
+     */
+    private function is_health_related($message) {
+        $message_lower = strtolower($message);
+        $health_keywords = array('health', 'medical', 'condition', 'disease', 'illness', 'symptom', 'pain', 'anxiety', 'depression', 'medication', 'doctor', 'clinician', 'safe', 'bad for', 'harmful', 'side effect');
+        
+        foreach ($health_keywords as $keyword) {
+            if (strpos($message_lower, $keyword) !== false) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Save user profile preferences
+     */
+    private function save_user_profile($session_id, $profile) {
+        $profile_key = 'lol_user_profile_' . md5($session_id);
+        $existing = get_transient($profile_key);
+        if ($existing) {
+            $profile = array_merge($existing, $profile);
+        }
+        set_transient($profile_key, $profile, HOUR_IN_SECONDS * 24);
+    }
+    
+    /**
+     * Get user profile preferences
+     */
+    private function get_user_profile($session_id) {
+        $profile_key = 'lol_user_profile_' . md5($session_id);
+        return get_transient($profile_key) ?: array();
     }
     
     /**

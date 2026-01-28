@@ -96,6 +96,10 @@
             sendButton.prop('disabled', true).text(lolChat.strings.sending);
             
             // Send to API (always include session_id)
+            sendChatRequest(message, loadingId, 0);
+        }
+        
+        function sendChatRequest(message, loadingId, retryCount) {
             $.ajax({
                 url: lolChat.apiUrl,
                 method: 'POST',
@@ -110,6 +114,12 @@
                     // Remove loading message
                     $('#' + loadingId).remove();
                     
+                    // Handle structured response
+                    if (!response.ok) {
+                        handleErrorResponse(response, loadingId, message, retryCount);
+                        return;
+                    }
+                    
                     // Update session ID
                     if (response.session_id) {
                         sessionId = response.session_id;
@@ -117,32 +127,25 @@
                     }
                     
                     // Add assistant response
-                    if (response.response) {
+                    if (response.assistant_message) {
+                        addMessage('assistant', response.assistant_message);
+                    } else if (response.response) {
+                        // Fallback for old format
                         addMessage('assistant', response.response);
                     }
                     
                     // Add product recommendations
-                    if (response.products && response.products.length > 0) {
-                        addProducts(response.products);
+                    const products = response.recommendations || response.products || [];
+                    if (products.length > 0) {
+                        addProducts(products);
                     }
                     
-                    // Add follow-up questions if provided
-                    if (response.questions && response.questions.length > 0) {
-                        addQuestions(response.questions);
-                    }
-                },
-                error: function(xhr) {
-                    // Remove loading message
-                    $('#' + loadingId).remove();
-                    
-                    let errorMessage = lolChat.strings.error;
-                    if (xhr.responseJSON && xhr.responseJSON.message) {
-                        errorMessage = xhr.responseJSON.message;
+                    // Add clarifying questions as quick-reply buttons
+                    const questions = response.clarifying_questions || response.questions || [];
+                    if (questions.length > 0) {
+                        addClarifyingQuestions(questions);
                     }
                     
-                    addMessage('assistant', errorMessage, false, 'error');
-                },
-                complete: function() {
                     // Re-enable input
                     input.prop('disabled', false);
                     sendButton.prop('disabled', false).text('Send');
@@ -150,8 +153,71 @@
                     
                     // Scroll to bottom
                     scrollToBottom();
+                },
+                error: function(xhr) {
+                    // Remove loading message
+                    $('#' + loadingId).remove();
+                    
+                    // Try to parse error response
+                    let errorResponse = null;
+                    if (xhr.responseJSON) {
+                        errorResponse = xhr.responseJSON;
+                    }
+                    
+                    if (errorResponse && !errorResponse.ok) {
+                        handleErrorResponse(errorResponse, loadingId, message, retryCount);
+                    } else {
+                        // Generic error
+                        addMessage('assistant', 'I\'m having a technical issue right now. Could you try rephrasing your question, or feel free to browse our menu directly?', false, 'error');
+                        input.prop('disabled', false);
+                        sendButton.prop('disabled', false).text('Send');
+                        input.focus();
+                        scrollToBottom();
+                    }
                 }
             });
+        }
+        
+        function handleErrorResponse(response, loadingId, originalMessage, retryCount) {
+            const errorType = response.error_type || 'unknown';
+            const retryAfter = response.retry_after || 5;
+            
+            if (errorType === 'rate_limited' && retryCount === 0) {
+                // Show countdown and auto-retry once
+                let countdown = retryAfter;
+                const countdownMsg = addMessage('assistant', 'Rate limit reached. Retrying in ' + countdown + ' seconds...', false, 'warning');
+                
+                const countdownInterval = setInterval(function() {
+                    countdown--;
+                    if (countdown > 0) {
+                        $('#' + countdownMsg).html('Rate limit reached. Retrying in ' + countdown + ' seconds...');
+                    } else {
+                        clearInterval(countdownInterval);
+                        $('#' + countdownMsg).remove();
+                        // Retry once
+                        const newLoadingId = addMessage('assistant', '...', true);
+                        input.prop('disabled', true);
+                        sendButton.prop('disabled', true).text('Retrying...');
+                        sendChatRequest(originalMessage, newLoadingId, 1);
+                    }
+                }, 1000);
+            } else if (errorType === 'temporary' && retryCount === 0) {
+                // Auto-retry once for temporary errors
+                setTimeout(function() {
+                    const newLoadingId = addMessage('assistant', 'Retrying...', true);
+                    input.prop('disabled', true);
+                    sendButton.prop('disabled', true).text('Retrying...');
+                    sendChatRequest(originalMessage, newLoadingId, 1);
+                }, retryAfter * 1000);
+            } else {
+                // Show error message
+                const errorMsg = response.assistant_message || 'I\'m having trouble right now. Please try again in a moment, or feel free to browse our menu directly.';
+                addMessage('assistant', errorMsg, false, 'error');
+                input.prop('disabled', false);
+                sendButton.prop('disabled', false).text('Send');
+                input.focus();
+                scrollToBottom();
+            }
         }
         
         function addMessage(role, content, isLoading, className) {
@@ -161,7 +227,7 @@
             const messageHtml = $('<div>')
                 .attr('id', messageId)
                 .addClass(messageClass)
-                .html(isLoading ? '<span class="lol-loading">' + content + '</span>' : formatMessage(content));
+                .html('<div class="lol-message-content">' + (isLoading ? '<span class="lol-loading">' + content + '</span>' : formatMessage(content)) + '</div>');
             
             messagesContainer.append(messageHtml);
             scrollToBottom();
@@ -185,16 +251,21 @@
             const productsHtml = $('<div>').addClass('lol-products');
             
             products.forEach(function(product) {
+                const productUrl = product.remote_url || product.url || '#';
+                const productImage = product.image ? '<img src="' + escapeHtml(product.image) + '" alt="' + escapeHtml(product.name) + '" class="lol-product-image">' : '';
+                
                 const productHtml = $('<div>')
                     .addClass('lol-product')
                     .html(
+                        productImage +
                         '<div class="lol-product-header">' +
                             '<h4 class="lol-product-name">' + escapeHtml(product.name) + '</h4>' +
                             (product.price ? '<span class="lol-product-price">$' + escapeHtml(product.price) + '</span>' : '') +
                         '</div>' +
                         (product.category ? '<div class="lol-product-category">' + escapeHtml(product.category) + '</div>' : '') +
                         (product.short_reason ? '<div class="lol-product-reason">' + escapeHtml(product.short_reason) + '</div>' : '') +
-                        '<a href="' + escapeHtml(product.remote_url) + '" target="_blank" rel="noopener" class="lol-product-link button">View/Buy on Dutchie</a>'
+                        (product.description ? '<div class="lol-product-description">' + escapeHtml(product.description) + '</div>' : '') +
+                        '<a href="' + escapeHtml(productUrl) + '" target="_blank" rel="noopener noreferrer" class="lol-product-link button">View/Buy on Dutchie</a>'
                     );
                 
                 productsHtml.append(productHtml);

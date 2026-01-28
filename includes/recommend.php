@@ -23,6 +23,73 @@ class LOL_Recommend {
     }
     
     /**
+     * Get recommended products with intent-aware scoring
+     */
+    public function get_recommendations_with_intent($filters, $rec_intent, $top_n = 5) {
+        $products = $this->get_recommendations($filters, $top_n * 2); // Get more to re-score
+        
+        // Re-score products based on intent preferences
+        $scored_products = array();
+        foreach ($products as $product) {
+            $score = $this->score_product_with_intent($product, $rec_intent);
+            $scored_products[] = array(
+                'product' => $product,
+                'score' => $score,
+            );
+        }
+        
+        // Sort by score (descending)
+        usort($scored_products, function($a, $b) {
+            return $b['score'] - $a['score'];
+        });
+        
+        // Return top N
+        $top_products = array_slice($scored_products, 0, $top_n);
+        return array_column($top_products, 'product');
+    }
+    
+    /**
+     * Score product based on intent preferences
+     */
+    private function score_product_with_intent($product, $rec_intent) {
+        $score = isset($product['score']) ? $product['score'] : 0;
+        
+        // Boost for THC preference match
+        if (!empty($rec_intent['thc_preference']) && $rec_intent['thc_preference'] !== 'unknown') {
+            $thc = isset($product['thc']) ? floatval($product['thc']) : null;
+            if ($thc !== null) {
+                if ($rec_intent['thc_preference'] === 'low' && $thc < 15) {
+                    $score += 30;
+                } elseif ($rec_intent['thc_preference'] === 'medium' && $thc >= 15 && $thc <= 25) {
+                    $score += 30;
+                } elseif ($rec_intent['thc_preference'] === 'high' && $thc > 25) {
+                    $score += 30;
+                }
+            }
+        }
+        
+        // Boost for CBD preference
+        if (!empty($rec_intent['cbd_preference']) && $rec_intent['cbd_preference'] === 'yes') {
+            $cbd = isset($product['cbd']) ? floatval($product['cbd']) : 0;
+            if ($cbd > 0) {
+                $score += 25;
+            }
+        }
+        
+        // Penalize for avoid list
+        if (!empty($rec_intent['avoid']) && is_array($rec_intent['avoid'])) {
+            foreach ($rec_intent['avoid'] as $avoid_term) {
+                $product_text = strtolower($product['name'] . ' ' . (isset($product['description']) ? $product['description'] : ''));
+                if (strpos($product_text, strtolower($avoid_term)) !== false) {
+                    $score -= 50;
+                }
+            }
+        }
+        
+        return $score;
+    }
+    
+    /**
      * Get recommended products based on filters
      */
     public function get_recommendations($filters, $top_n = 5) {
@@ -284,6 +351,16 @@ class LOL_Recommend {
         
         $short_reason = implode('. ', array_slice($reasons, 0, 2));
         
+        $thc = get_post_meta($product->ID, '_lol_thc', true);
+        $cbd = get_post_meta($product->ID, '_lol_cbd', true);
+        $image_url = get_post_meta($product->ID, '_lol_image_url', true);
+        if (empty($image_url)) {
+            $thumbnail_id = get_post_thumbnail_id($product->ID);
+            if ($thumbnail_id) {
+                $image_url = wp_get_attachment_image_url($thumbnail_id, 'medium');
+            }
+        }
+        
         return array(
             'id' => $product->ID,
             'name' => $product->post_title,
@@ -294,6 +371,10 @@ class LOL_Recommend {
             'effects' => $effects,
             'short_reason' => $short_reason,
             'remote_url' => $remote_url,
+            'url' => $remote_url, // Alias for frontend compatibility
+            'image' => $image_url,
+            'thc' => $thc,
+            'cbd' => $cbd,
         );
     }
     

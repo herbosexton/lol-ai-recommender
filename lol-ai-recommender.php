@@ -75,6 +75,7 @@ class LOL_AI_Recommender {
         require_once LOL_PLUGIN_DIR . 'includes/parser.php';
         require_once LOL_PLUGIN_DIR . 'includes/sync.php';
         require_once LOL_PLUGIN_DIR . 'includes/openai.php';
+        require_once LOL_PLUGIN_DIR . 'includes/intent.php';
         require_once LOL_PLUGIN_DIR . 'includes/recommend.php';
         require_once LOL_PLUGIN_DIR . 'includes/rest.php';
     }

@@ -92,7 +92,7 @@ class LOL_OpenAI {
     }
     
     /**
-     * Generate chat completion
+     * Generate chat completion with robust error handling
      */
     public function chat_completion($messages, $model = 'gpt-4o-mini') {
         if (!$this->is_configured()) {
@@ -107,15 +107,19 @@ class LOL_OpenAI {
             'body' => json_encode(array(
                 'model' => $model,
                 'messages' => $messages,
-                'temperature' => 0.5, // Lower temperature for more consistent responses
-                'max_tokens' => 400, // Limit response length
-                'presence_penalty' => 0.4, // Discourage repeating topics
-                'frequency_penalty' => 0.4, // Discourage repeating phrases
+                'temperature' => 0.5,
+                'max_tokens' => 400,
+                'presence_penalty' => 0.4,
+                'frequency_penalty' => 0.4,
             )),
             'timeout' => 30,
         ));
         
         if (is_wp_error($response)) {
+            $error_code = $response->get_error_code();
+            if (strpos($error_code, 'timeout') !== false || strpos($error_code, 'connect') !== false) {
+                return new WP_Error('temporary_error', __('Connection timeout. Please try again.', 'lol-ai-recommender'), array('retry_after' => 5));
+            }
             return $response;
         }
         
@@ -123,9 +127,24 @@ class LOL_OpenAI {
         $body = wp_remote_retrieve_body($response);
         $data = json_decode($body, true);
         
+        if ($code === 429) {
+            // Rate limit - extract retry-after if available
+            $retry_after = wp_remote_retrieve_header($response, 'retry-after');
+            $retry_seconds = $retry_after ? intval($retry_after) : 20;
+            return new WP_Error('rate_limited', __('Rate limit exceeded. Please wait a moment.', 'lol-ai-recommender'), array('retry_after' => $retry_seconds));
+        }
+        
         if ($code !== 200) {
             $error_message = isset($data['error']['message']) ? $data['error']['message'] : __('OpenAI API error', 'lol-ai-recommender');
-            return new WP_Error('openai_api_error', $error_message);
+            $error_type = isset($data['error']['type']) ? $data['error']['type'] : 'unknown';
+            
+            // Handle content moderation
+            if ($error_type === 'content_filter' || strpos(strtolower($error_message), 'moderation') !== false) {
+                // Return safe fallback instead of error
+                return __('I understand you have questions. For health and safety guidance, I recommend consulting with a healthcare provider. I can help you find products—what are you looking for?', 'lol-ai-recommender');
+            }
+            
+            return new WP_Error('openai_api_error', $error_message, array('error_type' => $error_type));
         }
         
         if (!isset($data['choices'][0]['message']['content'])) {
