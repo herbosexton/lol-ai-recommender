@@ -207,13 +207,35 @@ class LOL_Recommend {
             $score += 10;
         }
         
-        // Keyword match in title/description
+        // Keyword match in title/description (enhanced)
         $content = strtolower($product->post_title . ' ' . $product->post_content);
         if (!empty($filters['intent_summary'])) {
             $keywords = explode(' ', strtolower($filters['intent_summary']));
             foreach ($keywords as $keyword) {
                 if (strlen($keyword) > 3 && stripos($content, $keyword) !== false) {
                     $score += 5;
+                }
+            }
+        }
+        
+        // Description match bonus (if description contains relevant keywords)
+        if (!empty($filters['must_have']) && is_array($filters['must_have'])) {
+            foreach ($filters['must_have'] as $must_have) {
+                if (stripos($content, strtolower($must_have)) !== false) {
+                    $score += 15; // Higher weight for must-have features
+                }
+            }
+        }
+        
+        // Category description match (if category has descriptive terms)
+        $categories = wp_get_post_terms($product->ID, 'lol_category', array('fields' => 'names'));
+        $category_text = implode(' ', array_map('strtolower', $categories));
+        if (!empty($filters['intent_summary']) && !empty($category_text)) {
+            // Check if intent mentions category-related terms
+            $category_keywords = array('flower', 'bud', 'vape', 'edible', 'gummy', 'preroll', 'concentrate', 'tincture', 'topical');
+            foreach ($category_keywords as $cat_keyword) {
+                if (stripos($filters['intent_summary'], $cat_keyword) !== false && stripos($category_text, $cat_keyword) !== false) {
+                    $score += 20; // Strong match for category mentions
                 }
             }
         }
@@ -228,30 +250,39 @@ class LOL_Recommend {
         $remote_url = get_post_meta($product->ID, '_lol_remote_url', true);
         $price = get_post_meta($product->ID, '_lol_price', true);
         $brand = get_post_meta($product->ID, '_lol_brand', true);
+        $description = $product->post_content;
         
         $categories = wp_get_post_terms($product->ID, 'lol_category', array('fields' => 'names'));
         $category = !empty($categories) ? $categories[0] : '';
         
-        // Generate short reason
+        $effects = wp_get_post_terms($product->ID, 'lol_effects', array('fields' => 'names'));
+        
+        // Generate short reason with more detail
         $reasons = array();
         if (!empty($category) && !empty($filters['category']) && stripos($category, $filters['category']) !== false) {
-            $reasons[] = __('Matches your category preference', 'lol-ai-recommender');
+            $reasons[] = sprintf(__('Matches your %s category preference', 'lol-ai-recommender'), $category);
         }
         if (!empty($brand) && !empty($filters['brand']) && stripos($brand, $filters['brand']) !== false) {
-            $reasons[] = __('From your preferred brand', 'lol-ai-recommender');
+            $reasons[] = sprintf(__('From your preferred brand: %s', 'lol-ai-recommender'), $brand);
         }
         if (!empty($filters['effects'])) {
-            $effects = wp_get_post_terms($product->ID, 'lol_effects', array('fields' => 'names'));
             $matched = array_intersect(array_map('strtolower', $effects), array_map('strtolower', $filters['effects']));
             if (!empty($matched)) {
-                $reasons[] = __('Has desired effects', 'lol-ai-recommender');
+                $reasons[] = sprintf(__('Provides %s effects', 'lol-ai-recommender'), implode(' and ', array_slice($matched, 0, 2)));
+            }
+        }
+        if (!empty($description) && strlen($description) > 20) {
+            // Include a snippet of description if available
+            $desc_snippet = wp_trim_words($description, 15);
+            if (strlen($desc_snippet) > 0) {
+                $reasons[] = $desc_snippet;
             }
         }
         if (empty($reasons)) {
             $reasons[] = __('Popular choice', 'lol-ai-recommender');
         }
         
-        $short_reason = implode(', ', array_slice($reasons, 0, 2));
+        $short_reason = implode('. ', array_slice($reasons, 0, 2));
         
         return array(
             'id' => $product->ID,
@@ -259,6 +290,8 @@ class LOL_Recommend {
             'price' => $price,
             'category' => $category,
             'brand' => $brand,
+            'description' => wp_trim_words($description, 30),
+            'effects' => $effects,
             'short_reason' => $short_reason,
             'remote_url' => $remote_url,
         );
@@ -287,6 +320,23 @@ class LOL_Recommend {
     public function get_available_effects($limit = 20) {
         $terms = get_terms(array(
             'taxonomy' => 'lol_effects',
+            'hide_empty' => true,
+            'number' => $limit,
+        ));
+        
+        if (is_wp_error($terms)) {
+            return array();
+        }
+        
+        return wp_list_pluck($terms, 'name');
+    }
+    
+    /**
+     * Get available brands for question generation
+     */
+    public function get_available_brands($limit = 20) {
+        $terms = get_terms(array(
+            'taxonomy' => 'lol_brand',
             'hide_empty' => true,
             'number' => $limit,
         ));

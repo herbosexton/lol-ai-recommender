@@ -249,12 +249,31 @@ class LOL_Admin {
             
             <hr>
             
+            <h2><?php esc_html_e('Test & Debug', 'lol-ai-recommender'); ?></h2>
+            <p><?php esc_html_e('Test the crawler and parser on a single URL before running a full sync.', 'lol-ai-recommender'); ?></p>
+            <button type="button" id="lol-test-crawler" class="button button-secondary">
+                <?php esc_html_e('Test Crawler', 'lol-ai-recommender'); ?>
+            </button>
+            <span id="lol-test-status" style="margin-left: 10px;"></span>
+            
+            <div id="lol-test-results" style="margin-top: 15px; display: none;">
+                <h3><?php esc_html_e('Test Results', 'lol-ai-recommender'); ?></h3>
+                <pre id="lol-test-results-content" style="background: #f5f5f5; padding: 15px; border: 1px solid #ddd; overflow: auto; max-height: 400px; white-space: pre-wrap;"></pre>
+            </div>
+            
+            <hr>
+            
             <h2><?php esc_html_e('Manual Sync', 'lol-ai-recommender'); ?></h2>
             <p><?php esc_html_e('Click the button below to manually trigger a product sync.', 'lol-ai-recommender'); ?></p>
             <button type="button" id="lol-manual-sync" class="button button-secondary">
                 <?php esc_html_e('Run Sync Now', 'lol-ai-recommender'); ?>
             </button>
             <span id="lol-sync-status" style="margin-left: 10px;"></span>
+            
+            <div id="lol-sync-details" style="margin-top: 15px; display: none;">
+                <h3><?php esc_html_e('Sync Details', 'lol-ai-recommender'); ?></h3>
+                <pre id="lol-sync-details-content" style="background: #f5f5f5; padding: 15px; border: 1px solid #ddd; overflow: auto; max-height: 300px;"></pre>
+            </div>
         </div>
         <?php
     }

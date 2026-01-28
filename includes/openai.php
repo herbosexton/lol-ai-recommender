@@ -136,17 +136,27 @@ class LOL_OpenAI {
     /**
      * Extract structured filters from conversation
      */
-    public function extract_filters($conversation_history) {
+    public function extract_filters($conversation_history, $available_categories = array(), $available_brands = array()) {
         if (!$this->is_configured()) {
             return new WP_Error('no_api_key', __('OpenAI API key not configured', 'lol-ai-recommender'));
         }
         
-        $system_prompt = "You are a helpful assistant that extracts product search criteria from customer conversations. Analyze the conversation and return ONLY a valid JSON object with this exact structure:
+        $category_context = '';
+        if (!empty($available_categories)) {
+            $category_context = "\n\nAvailable product categories: " . implode(', ', array_slice($available_categories, 0, 20));
+        }
+        
+        $brand_context = '';
+        if (!empty($available_brands)) {
+            $brand_context = "\n\nAvailable brands: " . implode(', ', array_slice($available_brands, 0, 20));
+        }
+        
+        $system_prompt = "You are a helpful assistant that extracts product search criteria from customer conversations for a cannabis dispensary. Analyze the conversation and return ONLY a valid JSON object with this exact structure:
 
 {
-  \"intent_summary\": \"Brief summary of what the customer wants\",
+  \"intent_summary\": \"Brief summary of what the customer wants, including desired effects, use case, and preferences\",
   \"filters\": {
-    \"category\": \"product category if mentioned, or empty string\",
+    \"category\": \"product category if mentioned (e.g., Flower, Vapes, Edibles, Prerolls, Concentrates, Tinctures, Topicals). Match to available categories if possible, or empty string\",
     \"brand\": \"brand name if mentioned, or empty string\",
     \"effects\": [\"effect1\", \"effect2\"],
     \"price_max\": 0
@@ -157,11 +167,15 @@ class LOL_OpenAI {
 }
 
 Rules:
+- Categories: Common cannabis categories include Flower, Vapes, Edibles, Prerolls, Concentrates, Tinctures, Topicals, Drinks, Moon Rocks, Accessories, Bundles, Chocolates
+- If customer mentions \"flower\", \"bud\", \"weed\", \"herb\" → category: \"Flower\"
+- If customer mentions \"vape\", \"cart\", \"cartridge\" → category: \"Vapes\"
+- If customer mentions \"edible\", \"gummy\", \"chocolate\", \"cookie\" → category: \"Edibles\"
+- Effects: Extract from mentions like \"relaxing\", \"energizing\", \"sleep\", \"pain relief\", \"anxiety\", \"focus\", \"creative\", \"euphoric\", \"calming\", \"uplifting\"
 - If price/budget mentioned, set price_max (number only, no currency)
 - If no price mentioned, set price_max to 0
-- Extract effects from mentions like \"relaxing\", \"energizing\", \"sleep\", \"pain relief\", etc.
 - top_n should be 3-10 based on how specific the request is
-- Return ONLY the JSON, no other text";
+- Return ONLY the JSON, no other text" . $category_context . $brand_context;
 
         $conversation_text = '';
         foreach ($conversation_history as $msg) {

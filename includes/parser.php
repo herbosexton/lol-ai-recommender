@@ -62,11 +62,111 @@ class LOL_Parser {
             $product_data = array_merge($product_data, $this->parse_embedded_json($embedded_json));
         }
         
+        // Extract category from page structure (breadcrumbs, navigation, etc.)
+        if (empty($product_data['category'])) {
+            $category_from_page = $this->extract_category_from_page($html, $url);
+            if (!empty($category_from_page)) {
+                $product_data['category'] = $category_from_page;
+            }
+        }
+        
+        // Enhance description with additional product details from page
+        $enhanced_description = $this->extract_enhanced_description($html);
+        if (!empty($enhanced_description) && empty($product_data['description'])) {
+            $product_data['description'] = $enhanced_description;
+        }
+        
         // Extract remote_id from URL if possible
         $product_data['remote_id'] = $this->extract_id_from_url($url);
         
         // Sanitize all fields
         return $this->sanitize_product_data($product_data);
+    }
+    
+    /**
+     * Extract category from page structure (breadcrumbs, URL, navigation)
+     */
+    private function extract_category_from_page($html, $url) {
+        $categories = array();
+        
+        // Extract from breadcrumbs
+        preg_match_all('/<[^>]*class=["\'][^"\']*breadcrumb[^"\']*["\'][^>]*>(.*?)<\/[^>]+>/is', $html, $breadcrumb_matches);
+        if (!empty($breadcrumb_matches[1])) {
+            foreach ($breadcrumb_matches[1] as $breadcrumb) {
+                preg_match_all('/<a[^>]*>([^<]+)<\/a>/i', $breadcrumb, $links);
+                if (!empty($links[1])) {
+                    foreach ($links[1] as $link_text) {
+                        $link_text = trim(strip_tags($link_text));
+                        // Skip common non-category terms
+                        if (!in_array(strtolower($link_text), array('home', 'menu', 'products', 'shop', 'store'))) {
+                            $categories[] = $link_text;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Extract from URL path (e.g., /menu/flower/product-name)
+        if (preg_match('/\/(?:menu|category|products?)\/([^\/]+)/i', $url, $url_matches)) {
+            $url_category = urldecode($url_matches[1]);
+            // Common category names
+            $common_categories = array('flower', 'vapes', 'edibles', 'prerolls', 'concentrates', 'drinks', 'syrup', 'moon-rocks', 'tinctures', 'topicals', 'accessories', 'bundles', 'chocolates');
+            if (in_array(strtolower($url_category), $common_categories) || strlen($url_category) > 3) {
+                $categories[] = ucwords(str_replace('-', ' ', $url_category));
+            }
+        }
+        
+        // Extract from meta tags or structured data
+        if (preg_match('/<meta[^>]*name=["\']category["\'][^>]*content=["\']([^"\']+)["\']/i', $html, $meta_matches)) {
+            $categories[] = $meta_matches[1];
+        }
+        
+        // Extract from navigation/active menu items
+        preg_match_all('/<[^>]*class=["\'][^"\']*(?:active|current|selected)[^"\']*["\'][^>]*>([^<]+)<\/[^>]+>/i', $html, $active_matches);
+        if (!empty($active_matches[1])) {
+            foreach ($active_matches[1] as $active_text) {
+                $active_text = trim(strip_tags($active_text));
+                if (strlen($active_text) > 2 && strlen($active_text) < 30) {
+                    $categories[] = $active_text;
+                }
+            }
+        }
+        
+        // Return first valid category found
+        return !empty($categories) ? $categories[0] : '';
+    }
+    
+    /**
+     * Extract enhanced product description from page
+     */
+    private function extract_enhanced_description($html) {
+        $description = '';
+        
+        // Try to find product description in common containers
+        $description_patterns = array(
+            '/<div[^>]*class=["\'][^"\']*description[^"\']*["\'][^>]*>(.*?)<\/div>/is',
+            '/<p[^>]*class=["\'][^"\']*description[^"\']*["\'][^>]*>(.*?)<\/p>/is',
+            '/<div[^>]*class=["\'][^"\']*product-description[^"\']*["\'][^>]*>(.*?)<\/div>/is',
+            '/<div[^>]*class=["\'][^"\']*product-details[^"\']*["\'][^>]*>(.*?)<\/div>/is',
+        );
+        
+        foreach ($description_patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches)) {
+                $description = strip_tags($matches[1]);
+                $description = preg_replace('/\s+/', ' ', $description);
+                $description = trim($description);
+                if (strlen($description) > 50) {
+                    return $description;
+                }
+            }
+        }
+        
+        // Try to extract from JSON-LD description (already handled, but check for longer version)
+        if (preg_match('/"description"\s*:\s*"([^"]{50,})"/i', $html, $json_matches)) {
+            return trim($json_matches[1]);
+        }
+        
+        return '';
     }
     
     /**

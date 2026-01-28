@@ -51,6 +51,20 @@ class LOL_REST {
             'callback' => array($this, 'handle_sync'),
             'permission_callback' => array($this, 'check_admin_permission'),
         ));
+        
+        // Test endpoint (admin only)
+        register_rest_route('lol/v1', '/test', array(
+            'methods' => 'GET',
+            'callback' => array($this, 'handle_test'),
+            'permission_callback' => array($this, 'check_admin_permission'),
+            'args' => array(
+                'url' => array(
+                    'required' => false,
+                    'type' => 'string',
+                    'sanitize_callback' => 'esc_url_raw',
+                ),
+            ),
+        ));
     }
     
     /**
@@ -103,8 +117,12 @@ class LOL_REST {
             }
         }
         
+        // Get available categories and brands for context
+        $available_categories = $recommend->get_available_categories();
+        $available_brands = $recommend->get_available_brands();
+        
         // Extract filters from conversation
-        $filters = $openai->extract_filters($conversation);
+        $filters = $openai->extract_filters($conversation, $available_categories, $available_brands);
         
         if (is_wp_error($filters)) {
             // Fallback: simple keyword search
@@ -121,19 +139,33 @@ class LOL_REST {
         $top_n = isset($filters['top_n']) ? intval($filters['top_n']) : 5;
         $products = $recommend->get_recommendations($filters['filters'], $top_n);
         
-        // Generate AI response
-        $system_prompt = "You are a helpful dispensary assistant. Recommend products naturally and conversationally. Mention 2-3 products by name and why they're good matches. Keep response under 150 words.";
-        
-        $product_names = array();
+        // Build product context with categories and descriptions
+        $product_context = array();
         foreach ($products as $product) {
-            $product_names[] = $product['name'] . ' ($' . $product['price'] . ')';
+            $product_info = $product['name'];
+            if (!empty($product['category'])) {
+                $product_info .= ' (' . $product['category'] . ')';
+            }
+            if (!empty($product['price'])) {
+                $product_info .= ' - $' . $product['price'];
+            }
+            if (!empty($product['short_reason'])) {
+                $product_info .= ' - ' . $product['short_reason'];
+            }
+            $product_context[] = $product_info;
         }
         
-        $product_list = !empty($product_names) ? "\n\nAvailable products: " . implode(', ', array_slice($product_names, 0, 5)) : '';
+        $product_list = !empty($product_context) ? "\n\nRecommended products:\n" . implode("\n", array_slice($product_context, 0, 5)) : '';
+        
+        // Generate AI response with category context
+        $category_info = !empty($filters['filters']['category']) ? "\n\nCustomer is interested in: " . $filters['filters']['category'] : '';
+        $effects_info = !empty($filters['filters']['effects']) ? "\n\nDesired effects: " . implode(', ', $filters['filters']['effects']) : '';
+        
+        $system_prompt = "You are a helpful and knowledgeable cannabis dispensary assistant. Recommend products naturally and conversationally based on the customer's needs. Mention 2-3 specific products by name, their category, and explain why they're good matches based on the customer's preferences. Be friendly, informative, and helpful. Keep response under 200 words.";
         
         $ai_messages = array(
             array('role' => 'system', 'content' => $system_prompt),
-            array('role' => 'user', 'content' => "Customer wants: " . $filters['intent_summary'] . $product_list . "\n\nGenerate a helpful recommendation response:"),
+            array('role' => 'user', 'content' => "Customer wants: " . $filters['intent_summary'] . $category_info . $effects_info . $product_list . "\n\nGenerate a helpful, personalized recommendation response:"),
         );
         
         $ai_response = $openai->chat_completion($ai_messages);
@@ -164,6 +196,99 @@ class LOL_REST {
         $result = $sync->sync_products();
         
         return rest_ensure_response($result);
+    }
+    
+    /**
+     * Handle test request - test crawler and parser on a single URL
+     */
+    public function handle_test($request) {
+        $test_url = $request->get_param('url');
+        $menu_base = get_option('lol_dutchie_menu_base_url', '');
+        
+        $results = array(
+            'success' => false,
+            'tests' => array(),
+        );
+        
+        // Test 1: Check configuration
+        $results['tests']['configuration'] = array(
+            'menu_base_url' => $menu_base,
+            'sitemap_url' => get_option('lol_dutchie_sitemap_url', ''),
+            'openai_configured' => LOL_OpenAI::get_instance()->is_configured(),
+        );
+        
+        // Test 2: Test URL fetching
+        if (empty($test_url) && !empty($menu_base)) {
+            $test_url = $menu_base;
+        }
+        
+        if (empty($test_url)) {
+            $results['error'] = 'No URL provided. Add ?url=https://example.com/product to test a specific URL, or configure Menu Base URL.';
+            return rest_ensure_response($results);
+        }
+        
+        $crawler = LOL_Crawler::get_instance();
+        
+        // Test 2: Fetch a page
+        $results['tests']['fetch_page'] = array(
+            'url' => $test_url,
+            'status' => 'testing',
+        );
+        
+        $page_data = $crawler->fetch_product_page($test_url);
+        
+        if (is_wp_error($page_data)) {
+            $results['tests']['fetch_page']['status'] = 'error';
+            $results['tests']['fetch_page']['error'] = $page_data->get_error_message();
+            return rest_ensure_response($results);
+        }
+        
+        $results['tests']['fetch_page']['status'] = 'success';
+        $results['tests']['fetch_page']['body_length'] = strlen($page_data['body']);
+        $results['tests']['fetch_page']['has_etag'] = !empty($page_data['etag']);
+        
+        // Test 3: Parse product data
+        $parser = LOL_Parser::get_instance();
+        $product_data = $parser->parse_product($page_data['body'], $test_url);
+        
+        $results['tests']['parse_product'] = array(
+            'status' => 'success',
+            'data' => array(
+                'name' => $product_data['name'],
+                'category' => $product_data['category'],
+                'brand' => $product_data['brand'],
+                'description_length' => strlen($product_data['description']),
+                'price' => $product_data['price'],
+                'thc' => $product_data['thc'],
+                'cbd' => $product_data['cbd'],
+                'has_image' => !empty($product_data['image_url']),
+                'in_stock' => $product_data['in_stock'],
+                'effects' => $product_data['effects'],
+            ),
+        );
+        
+        // Test 4: Test product URL discovery (if menu base provided)
+        if (!empty($menu_base)) {
+            $results['tests']['discover_urls'] = array(
+                'status' => 'testing',
+                'menu_base' => $menu_base,
+            );
+            
+            $discovered_urls = $crawler->scrape_product_urls($menu_base, 3); // Limit to 3 pages for testing
+            
+            if (is_wp_error($discovered_urls)) {
+                $results['tests']['discover_urls']['status'] = 'error';
+                $results['tests']['discover_urls']['error'] = $discovered_urls->get_error_message();
+            } else {
+                $results['tests']['discover_urls']['status'] = 'success';
+                $results['tests']['discover_urls']['urls_found'] = count($discovered_urls);
+                $results['tests']['discover_urls']['sample_urls'] = array_slice($discovered_urls, 0, 5);
+            }
+        }
+        
+        $results['success'] = true;
+        
+        return rest_ensure_response($results);
     }
     
     /**

@@ -32,50 +32,49 @@ class LOL_Sync {
         
         // Get settings
         $sitemap_url = get_option('lol_dutchie_sitemap_url', '');
-        if (empty($sitemap_url)) {
-            // Try to build sitemap URL from menu base URL
-            $menu_base = get_option('lol_dutchie_menu_base_url', '');
-            if (!empty($menu_base)) {
-                $parsed = parse_url($menu_base);
-                
-                // Validate parsed URL has required components
-                if (!isset($parsed['scheme']) || !isset($parsed['host'])) {
-                    $errors[] = sprintf(__('Invalid menu base URL format: %s', 'lol-ai-recommender'), esc_html($menu_base));
-                    update_option('lol_last_sync_status', 'error');
-                    update_option('lol_last_sync_errors', $errors);
-                    return array('success' => false, 'errors' => $errors);
-                }
-                
-                $base_url = $parsed['scheme'] . '://' . $parsed['host'];
-                
-                // Try common sitemap locations
-                $possible_sitemaps = array(
-                    $base_url . '/sitemap.xml',
-                    $base_url . '/sitemap_index.xml',
-                    $base_url . '/sitemaps/sitemap.xml',
-                );
-                
-                // Test which one exists
-                foreach ($possible_sitemaps as $test_url) {
-                    $response = wp_remote_head($test_url, array('timeout' => 5));
-                    if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
-                        $sitemap_url = $test_url;
-                        break;
-                    }
-                }
-                
-                // Fallback to default
-                if (empty($sitemap_url)) {
-                    $sitemap_url = $base_url . '/sitemap.xml';
-                }
+        $menu_base = get_option('lol_dutchie_menu_base_url', '');
+        
+        // Validate menu base URL if provided
+        if (!empty($menu_base)) {
+            $parsed = parse_url($menu_base);
+            
+            // Validate parsed URL has required components
+            if (!isset($parsed['scheme']) || !isset($parsed['host'])) {
+                $errors[] = sprintf(__('Invalid menu base URL format: %s', 'lol-ai-recommender'), esc_html($menu_base));
+                update_option('lol_last_sync_status', 'error');
+                update_option('lol_last_sync_errors', $errors);
+                return array('success' => false, 'errors' => $errors);
             }
         }
         
-        if (empty($sitemap_url)) {
-            $errors[] = __('Sitemap URL not configured', 'lol-ai-recommender');
+        // Require at least menu base URL or sitemap URL
+        if (empty($menu_base) && empty($sitemap_url)) {
+            $errors[] = __('Either Menu Base URL or Sitemap URL must be configured', 'lol-ai-recommender');
             update_option('lol_last_sync_status', 'error');
             update_option('lol_last_sync_errors', $errors);
             return array('success' => false, 'errors' => $errors);
+        }
+        
+        // Try to auto-detect sitemap if menu base provided but no sitemap
+        if (empty($sitemap_url) && !empty($menu_base)) {
+            $parsed = parse_url($menu_base);
+            $base_url = $parsed['scheme'] . '://' . $parsed['host'];
+            
+            // Try common sitemap locations
+            $possible_sitemaps = array(
+                $base_url . '/sitemap.xml',
+                $base_url . '/sitemap_index.xml',
+                $base_url . '/sitemaps/sitemap.xml',
+            );
+            
+            // Test which one exists
+            foreach ($possible_sitemaps as $test_url) {
+                $response = wp_remote_head($test_url, array('timeout' => 5));
+                if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
+                    $sitemap_url = $test_url;
+                    break;
+                }
+            }
         }
         
         // Get max products limit
@@ -83,12 +82,19 @@ class LOL_Sync {
             $limit = get_option('lol_max_products_per_sync', 100);
         }
         
-        // Fetch sitemap URLs
+        // Fetch product URLs - tries sitemap first, then direct scraping
         $crawler = LOL_Crawler::get_instance();
-        $product_urls = $crawler->fetch_sitemap_urls($sitemap_url);
+        $product_urls = $crawler->fetch_product_urls($sitemap_url, $menu_base);
         
         if (is_wp_error($product_urls)) {
             $errors[] = $product_urls->get_error_message();
+            update_option('lol_last_sync_status', 'error');
+            update_option('lol_last_sync_errors', $errors);
+            return array('success' => false, 'errors' => $errors);
+        }
+        
+        if (empty($product_urls)) {
+            $errors[] = __('No product URLs found. Please check your Menu Base URL or Sitemap URL.', 'lol-ai-recommender');
             update_option('lol_last_sync_status', 'error');
             update_option('lol_last_sync_errors', $errors);
             return array('success' => false, 'errors' => $errors);

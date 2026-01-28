@@ -1,6 +1,6 @@
 <?php
 /**
- * Sitemap Crawler
+ * Sitemap Crawler and Direct Website Scraper
  */
 
 if (!defined('ABSPATH')) {
@@ -27,6 +27,36 @@ class LOL_Crawler {
     }
     
     /**
+     * Fetch product URLs - tries sitemap first, then direct scraping
+     */
+    public function fetch_product_urls($sitemap_url = '', $menu_base_url = '') {
+        $product_urls = array();
+        
+        // Try sitemap first if provided
+        if (!empty($sitemap_url)) {
+            $sitemap_urls = $this->fetch_sitemap_urls($sitemap_url);
+            if (!is_wp_error($sitemap_urls) && !empty($sitemap_urls)) {
+                return $sitemap_urls;
+            }
+        }
+        
+        // Fallback to direct website scraping
+        if (!empty($menu_base_url)) {
+            $scraped_urls = $this->scrape_product_urls($menu_base_url);
+            if (!is_wp_error($scraped_urls) && !empty($scraped_urls)) {
+                return $scraped_urls;
+            }
+        }
+        
+        // If both failed, return error
+        if (empty($product_urls)) {
+            return new WP_Error('no_urls_found', __('Could not find product URLs from sitemap or website scraping', 'lol-ai-recommender'));
+        }
+        
+        return $product_urls;
+    }
+    
+    /**
      * Fetch sitemap and extract product URLs
      */
     public function fetch_sitemap_urls($sitemap_url) {
@@ -45,6 +75,11 @@ class LOL_Crawler {
             return $response;
         }
         
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code !== 200) {
+            return new WP_Error('sitemap_not_found', sprintf(__('Sitemap returned status code: %d', 'lol-ai-recommender'), $code));
+        }
+        
         $body = wp_remote_retrieve_body($response);
         $urls = $this->parse_sitemap($body, $sitemap_url);
         
@@ -52,6 +87,182 @@ class LOL_Crawler {
         set_transient($cache_key, $urls, HOUR_IN_SECONDS);
         
         return $urls;
+    }
+    
+    /**
+     * Scrape product URLs directly from the website
+     */
+    public function scrape_product_urls($menu_base_url, $max_pages = 20) {
+        // Check cache
+        $cache_key = 'lol_scraped_' . md5($menu_base_url);
+        $cached = get_transient($cache_key);
+        
+        if ($cached !== false) {
+            return $cached;
+        }
+        
+        $product_urls = array();
+        $visited_urls = array();
+        $urls_to_visit = array($menu_base_url);
+        
+        $parsed_base = parse_url($menu_base_url);
+        $base_host = $parsed_base['scheme'] . '://' . $parsed_base['host'];
+        
+        while (!empty($urls_to_visit) && count($visited_urls) < $max_pages) {
+            $current_url = array_shift($urls_to_visit);
+            
+            // Skip if already visited
+            if (isset($visited_urls[$current_url])) {
+                continue;
+            }
+            
+            $visited_urls[$current_url] = true;
+            
+            // Fetch page
+            $response = $this->make_request($current_url);
+            
+            if (is_wp_error($response)) {
+                continue;
+            }
+            
+            $body = wp_remote_retrieve_body($response);
+            
+            // Extract product URLs from the page
+            $found_products = $this->extract_product_urls_from_html($body, $base_host);
+            
+            foreach ($found_products as $product_url) {
+                if (!isset($product_urls[$product_url])) {
+                    $product_urls[$product_url] = true;
+                }
+            }
+            
+            // Extract category/menu page links to crawl further
+            $category_links = $this->extract_category_links($body, $base_host, $menu_base_url);
+            foreach ($category_links as $link) {
+                if (!isset($visited_urls[$link]) && !in_array($link, $urls_to_visit)) {
+                    $urls_to_visit[] = $link;
+                }
+            }
+            
+            // Rate limiting delay
+            usleep(500000); // 0.5 seconds between pages
+        }
+        
+        $product_urls = array_keys($product_urls);
+        
+        // Cache for 2 hours
+        set_transient($cache_key, $product_urls, HOUR_IN_SECONDS * 2);
+        
+        return $product_urls;
+    }
+    
+    /**
+     * Extract product URLs from HTML content
+     */
+    private function extract_product_urls_from_html($html, $base_host) {
+        $product_urls = array();
+        
+        // Common patterns for product links in Dutchie/Blaze menus
+        // Look for links that contain product identifiers
+        
+        // Pattern 1: Links with /product/ or /products/ in path
+        preg_match_all('/href=["\']([^"\']*(?:\/product|\/products|\/item)[^"\']*)["\']/i', $html, $matches);
+        if (!empty($matches[1])) {
+            foreach ($matches[1] as $url) {
+                $url = $this->normalize_url($url, $base_host);
+                if ($url && $this->is_product_url($url, '')) {
+                    $product_urls[] = $url;
+                }
+            }
+        }
+        
+        // Pattern 2: Data attributes (common in React/SPA apps)
+        preg_match_all('/data-[^=]*url=["\']([^"\']+)["\']/i', $html, $matches);
+        if (!empty($matches[1])) {
+            foreach ($matches[1] as $url) {
+                $url = $this->normalize_url($url, $base_host);
+                if ($url && $this->is_product_url($url, '')) {
+                    $product_urls[] = $url;
+                }
+            }
+        }
+        
+        // Pattern 3: JSON-LD Product schema URLs
+        preg_match_all('/"@type"\s*:\s*"Product"[^}]*"url"\s*:\s*"([^"]+)"/i', $html, $matches);
+        if (!empty($matches[1])) {
+            foreach ($matches[1] as $url) {
+                $url = $this->normalize_url($url, $base_host);
+                if ($url) {
+                    $product_urls[] = $url;
+                }
+            }
+        }
+        
+        // Pattern 4: Look for product cards/items with specific classes (Dutchie/Blaze specific)
+        // Many Dutchie sites use data-product-id or similar attributes
+        preg_match_all('/<a[^>]*(?:data-product|class="[^"]*product[^"]*")[^>]*href=["\']([^"\']+)["\']/i', $html, $matches);
+        if (!empty($matches[1])) {
+            foreach ($matches[1] as $url) {
+                $url = $this->normalize_url($url, $base_host);
+                if ($url) {
+                    $product_urls[] = $url;
+                }
+            }
+        }
+        
+        return array_unique($product_urls);
+    }
+    
+    /**
+     * Extract category/menu page links for further crawling
+     */
+    private function extract_category_links($html, $base_host, $menu_base) {
+        $links = array();
+        
+        // Look for category links (usually in navigation or filters)
+        // Common patterns: /menu/category-name, /category/, etc.
+        preg_match_all('/href=["\']([^"\']*(?:\/menu\/|\/category\/|\/pickup\/|\/delivery\/)[^"\']*)["\']/i', $html, $matches);
+        
+        if (!empty($matches[1])) {
+            foreach ($matches[1] as $url) {
+                $url = $this->normalize_url($url, $base_host);
+                // Only include if it's under the menu base
+                if ($url && strpos($url, $menu_base) === 0 && !$this->is_product_url($url, '')) {
+                    $links[] = $url;
+                }
+            }
+        }
+        
+        return array_unique($links);
+    }
+    
+    /**
+     * Normalize URL (make absolute, remove fragments, etc.)
+     */
+    private function normalize_url($url, $base_host) {
+        // Remove fragments
+        $url = strtok($url, '#');
+        
+        // Skip javascript:, mailto:, etc.
+        if (preg_match('/^(javascript|mailto|tel|#)/i', $url)) {
+            return '';
+        }
+        
+        // If relative URL, make it absolute
+        if (strpos($url, 'http') !== 0) {
+            if (strpos($url, '/') === 0) {
+                // Absolute path
+                $url = $base_host . $url;
+            } else {
+                // Relative path
+                $url = $base_host . '/' . $url;
+            }
+        }
+        
+        // Remove query parameters that might cause duplicates
+        $url = strtok($url, '?');
+        
+        return $url;
     }
     
     /**
