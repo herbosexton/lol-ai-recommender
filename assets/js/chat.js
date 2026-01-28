@@ -114,9 +114,19 @@
                     // Remove loading message
                     $('#' + loadingId).remove();
                     
-                    // Handle structured response
-                    if (!response.ok) {
-                        handleErrorResponse(response, loadingId, message, retryCount);
+                    // Determine success flag (support both new and old shapes)
+                    const isOk = (typeof response.ok === 'undefined' || response.ok === null) ? true : !!response.ok;
+                    
+                    // Handle structured error response
+                    if (!isOk) {
+                        try {
+                            handleErrorResponse(response, loadingId, message, retryCount);
+                        } catch (e) {
+                            // Fallback if error handler itself fails
+                            addMessage('assistant', 'I\'m having a temporary issue. Please try again in a moment.', false, 'error');
+                            input.prop('disabled', false);
+                            sendButton.prop('disabled', false).text('Send');
+                        }
                         return;
                     }
                     
@@ -164,8 +174,16 @@
                         errorResponse = xhr.responseJSON;
                     }
                     
-                    if (errorResponse && !errorResponse.ok) {
-                        handleErrorResponse(errorResponse, loadingId, message, retryCount);
+                    if (errorResponse && typeof errorResponse.ok !== 'undefined' && !errorResponse.ok) {
+                        try {
+                            handleErrorResponse(errorResponse, loadingId, message, retryCount);
+                        } catch (e) {
+                            addMessage('assistant', 'I\'m having a technical issue right now. Could you try again in a moment?', false, 'error');
+                            input.prop('disabled', false);
+                            sendButton.prop('disabled', false).text('Send');
+                            input.focus();
+                            scrollToBottom();
+                        }
                     } else {
                         // Generic error
                         addMessage('assistant', 'I\'m having a technical issue right now. Could you try rephrasing your question, or feel free to browse our menu directly?', false, 'error');
